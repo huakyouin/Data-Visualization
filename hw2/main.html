@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>历史人物分析</title>
+
+    <style>
+        #SVG {
+            background-color: white
+        }
+    </style>
+</head>
+
+<body>
+    <!-- 用作画布的svg元素
+    <svg id='SVG'></svg> -->
+
+    <!-- 引入d3.js v7版本 -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="./functions.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-cloud@1.2.7/build/d3.layout.cloud.js"></script>
+
+    <script>
+
+        // 设置画布大小、四周留白
+        let clientWidth = updateWidth();
+        let width = clientWidth/2.05;
+        let height = 500;
+        let margin = 80;
+        let time_width = width *2;
+        let bar_height = 100;
+        let wordCloudfill=d3.scaleOrdinal(d3.schemeBrBG[6])  //直接使用d3的方法，产生词云颜色
+
+        var svg = d3.select("body")
+                .append("svg")
+                .attr("width", width)
+                .attr("height", height);
+        var svg2 = d3.select("body")
+            .append("svg")
+            .attr("id","#wordcloud")
+            .attr("width", width)
+            .attr("height", height)
+            // .style("left", 0)
+            .append("g")
+            .attr("transform", `translate(${ (width / 2)},${height / 2})`);
+        var svg3 = d3.select("body")
+            .append("svg")
+            .attr("id","#time")
+            .attr("width", time_width+margin)
+            .attr("height", height/2+margin)
+            .style("top", height+margin)
+            .attr("transform", `translate(0,10)`);
+
+        // create a tooltip
+        var tooltip = d3.select("body")
+                .append("div")
+                .style("position", "absolute")
+                .style("visibility", "hidden")
+                .style("background-color", "white")
+                .style("border", "solid")
+                .style("border-width", "1px")
+                .style("border-radius", "5px")
+                .style("padding", "10px")
+                .style("max-width","400px")
+                .on("mouseover", () => {
+                    // 当鼠标移入信息展示框时，阻止移出事件的触发
+                    tooltip.style("opacity", .9);
+                });
+
+        // 创建视图
+        buildChart('data/历史人物 - 苏轼生平.json','data/100000_full.json','data/su_shi_poems.json');
+        async function buildChart(json_path_people,json_path_maps,json_poems) {
+            const people = await d3.json(json_path_people);
+            const maps = await d3.json(json_path_maps)
+            const poems = await d3.json(json_poems)
+            people.forEach((i) => {
+                let from = parseInt(i.year_range.substring(0, 4));
+                let to = from;
+                if (i.year_range[4] === '-') {
+                    to = parseInt(i.year_range.substring(5, 9));
+                }
+                i.time = [from, to];
+            });
+            console.log(poems.poems)
+
+
+            /* 词云视图 */
+            // 遍历people数据集
+            Poemswords = [];
+            people.forEach(function(e) {
+                // 在poems数据集中查找匹配的诗句
+                // if(e.time[0]<1000){console.log(e.time[0]);return }
+                var matchedPoem = poems.poems.filter(poem=>{
+                    return e.articles.includes(poem.rhythmic)
+                });
+                if (matchedPoem.length > 0) {
+                    matchedPoem.map(d=>d.paragraphs).forEach(p=>{
+                        Poemswords.push(p)
+                    })
+                    ;
+                }
+            });
+            uniquePoemswords = Poemswords.filter((item, index) => {
+                return Poemswords.indexOf(item) === index
+            })
+            
+            build_wordcloud(uniquePoemswords.toString(),5,svg2,wordCloudfill)
+
+
+
+            /* 地图视图 */
+
+            // 使用投影函数将经纬度坐标转换为屏幕坐标
+            var projection = d3.geoMercator()
+                .center([105, 38]) 
+                .scale(600)
+                .translate([width / 2, height / 2]);
+
+            var path = d3.geoPath().projection(projection);
+
+            const colors = d3.scaleOrdinal(d3.schemeBrBG[7])
+
+            // 加载地图数据并绘制地图
+            const provinces = svg.selectAll("path")
+                    .data(maps.features)
+                    .enter()
+                    .append("path")
+                    .attr("fill", "white")
+                    .attr("stroke-width", 0.5)
+                    .attr("stroke-linecap",'round')
+                    .attr("stroke", "black")
+                    .attr("d", path)
+                    .on("mouseover",function(e,i){
+                        var name = i.properties.name;
+                        d3.select(this).attr("fill","lightblue");
+                        labels.filter(d=>  d.properties.name==name).transition().duration(50).style("opacity",1)
+                    } )
+                    .on("mouseout",function(e,i){
+                        d3.select(this).attr("fill","white");
+                        labels.filter(label => label.properties.name === i.properties.name).transition().duration(200).style("opacity", 0) ;
+                    });
+            // 添加省份名称标签
+            const labels = svg.selectAll("text")
+                    .data(maps.features)
+                    .enter()
+                    .append("text")
+                    .text(d=>d.properties.name)
+                    .attr("x", d=>path.centroid(d)[0])
+                    .attr("y", d=>path.centroid(d)[1])
+                    .attr("text-anchor", "middle")
+                    .attr("alignment-baseline", "central")
+                    .attr("fill", "black")
+                    .attr("font-size", "12px")
+                    .style("pointer-events", "none")  //不许选中
+                    .style("opacity", 0);  // 初始设置为不显示
+            
+
+            // 统计每个坐标对应的记录数量
+            const countByCoordinates = d3.rollup(
+            people,
+            v => v.length,
+            d => projection([d.longitude, d.latitude]).join(",")
+            );
+
+            // 获取最大记录数量
+            const maxRecordCount = d3.max(countByCoordinates.values());
+
+            // 创建颜色比例尺
+            const colorScale = d3.scaleLinear()
+            .domain([1, maxRecordCount])
+            .range(["black", "#ff0000"]);
+
+            // 添加人物事件节点
+            const events = svg.selectAll("circles")
+            .data(people)
+            .enter()
+            .append("circle")
+            .attr('cx', d => projection([d.longitude, d.latitude])[0])
+            .attr('cy', d => projection([d.longitude, d.latitude])[1])
+            .attr('r', 3)
+            .attr('fill', d => {
+                const coordinate = projection([d.longitude, d.latitude]).join(",");
+                const recordCount = countByCoordinates.get(coordinate);
+                return colorScale(recordCount);
+            })
+            .on("mouseover", (event, d) => {
+                var currentCircle = d3.select(event.currentTarget); // 通过参数传递的方式获取当前的圆圈元素
+                currentCircle.transition().duration(200).attr('r',5)
+                // 创建动态信息展示框
+                tooltip.style("visibility", "visible")
+                tooltip.html(`地点：${d.location}<br>时间：${d.year_range}<br>事件：${d.e_title}<br>描述：${d.e_description}`)
+                    .style("left", (event.pageX+ 50) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+            })
+            .on("mousemove", (event,d) => {
+                // 在鼠标移动时，更新信息展示框的位置
+                tooltip.style("left", (event.pageX+ 50) + "px").style("top", (event.pageY - 28) + "px");
+            })
+            .on("mouseout", (event, d) => {
+                var currentCircle = d3.select(event.currentTarget); // 通过参数传递的方式获取当前的圆圈元素
+                currentCircle.transition().duration(200).attr('r',3)
+                // 当鼠标移出时，隐藏信息展示框
+                tooltip.style("visibility", "hidden")
+            })
+            .on("click", (event,d)=>{
+                // 通过d来访问当前圆圈所绑定的数据
+                console.log("Clicked data:", d);
+
+                // 筛选同坐标的点
+                var allDataAtPosition = events.filter(function(e) {
+                    return d.longitude===e.longitude && d.latitude === e.latitude; 据
+                }).data();
+
+                // 在时间轴上点出这些位置
+                let temp=svg3.append("g").selectAll(".lines")
+                .data(allDataAtPosition)
+                .enter()
+                .append("line")
+                .attr("x1", d=>xScale(d.time[0])-2+xScale.bandwidth()/2)
+                .attr("y1", bar_height*1.5-15)
+                .attr("x2", d=>xScale(d.time[1])+2+xScale.bandwidth()/2)
+                .attr("y2", bar_height*1.5-15)
+                .style("stroke", "black")
+                .style("stroke-width", 4)
+                .transition()
+                .delay(500)
+                .duration(500)
+                .style("stroke-opacity", 0) // 逐渐将线的透明度设为0
+                .remove()
+
+            });
+
+        
+
+            // 创建线段元素并绑定数据
+            var line = d3.line()
+                .x(function(d) { return projection([d.longitude, d.latitude])[0]; })
+                .y(function(d) { return projection([d.longitude, d.latitude])[1]; })
+
+
+            // 绘制连接坐标点的线段
+            let direct= svg
+                .append("path")
+                .datum(people)
+                .attr("id","direction")
+                .attr("d", line)
+                .attr("fill", "none")
+                .attr("stroke-width", 2)
+                .attr('opacity',0.7)
+                .attr('stroke',"blue")
+            // 获取线段的总长度
+            var totalLength = direct.node().getTotalLength();
+            // 应用渐变
+            direct.style("stroke-dasharray", totalLength)
+            .style("stroke-dashoffset", totalLength)
+            .transition()
+            .duration(totalLength*3)
+            // .delay(totalLength*3)
+            .style("stroke-dashoffset", 0)
+            .transition()
+            .delay(20)
+            .style("opacity", 0)
+            
+            events.raise()
+
+            build_legend(svg,[width*0.8,250],colorScale.range(),["经过次数少", "经过次数多"],'circle')
+
+            /* 时间窗视图 */
+            var parseTime = d3.timeParse("%Y")
+
+            let data = people.map((d)=> {
+                return {
+                    time: d.time, 
+                    A: d.f_count, 
+                    B: d.article_count,
+                };
+                });
+
+            // 对数据进行处理，合并具有交集时间范围的记录，其他数字属性相加
+            var newData = [];
+            data.forEach(function(d) {
+                var overlappingRecord = newData.find(function(newD) {
+                    return doRangesOverlap(d.time, newD.time);
+                });
+
+                if (overlappingRecord) {
+                    // 合并时间范围
+                    overlappingRecord.time = [Math.min(d.time[0], overlappingRecord.time[0]), Math.max(d.time[1], overlappingRecord.time[1])];
+                    // 其他数字属性相加
+                    overlappingRecord.A += d.A;
+                    overlappingRecord.B += d.B;
+                } else {
+                    newData.push({ time: d.time, A: d.A, B: d.B });
+                }
+            });
+
+
+            // 创建时间比例尺
+            const xScale = d3.scaleBand()
+            .domain(d3.range(d3.min(data.map(d => d.time[0])),1+d3.max(data.map(d => d.time[1]))))
+            .range([0, time_width])
+            .padding(0.1);
+
+            
+            // x轴反比例尺
+            const invertX = d3.scaleLinear()
+            .domain([0, time_width])
+            .range([d3.min(data.map(d => d.time[0]))-0.5,d3.max(data.map(d => d.time[1]))+0.5])
+            
+            // 创建线性比例尺
+            const yAScale = d3.scaleLinear()
+            .domain([0, d3.max(data.map(d=>d.A))])
+            .range([100, 0]);
+
+            const yBScale = d3.scaleLinear()
+            .domain([0, d3.max(data.map(d=>Math.log(d.B+1)))])
+            .range([0,1]);
+
+
+            // 添加 A 属性的柱状图
+            svg3.selectAll(".bar.A")
+            .data(newData)
+            .enter().append("rect")
+            .attr("class", "bar A")
+            .attr("x", d => {return xScale(d.time[0]) })
+            .attr("y", d => yAScale(d.A)+10)
+            .attr("fill", "#1685a9") // 矩形的颜色
+            .attr("width", d => (xScale(d.time[1])-xScale(d.time[0]))+ xScale.bandwidth() )
+            .attr("height", d => bar_height - yAScale(d.A))
+            .on("mouseover", (event, d) => {
+                var current = d3.select(event.currentTarget); // 通过参数传递的方式获取当前的元素
+                current.transition().duration(200).attr('height',d=>bar_height - yAScale(d.A)+3).attr("y", d => yAScale(d.A)+7)
+                // 创建动态信息展示框
+                tooltip.style("visibility", "visible")
+                tooltip.html(`发明美食数：${d.A}`)
+                    .style("left", (event.pageX+ 10) + "px")
+                    .style("top", (event.pageY + 10) + "px");
+            })
+            .on("mousemove", (event,d) => {
+                // 在鼠标移动时，更新信息展示框的位置
+                tooltip.style("left", (event.pageX+ 10) + "px").style("top", (event.pageY+ 10 ) + "px");
+            })
+            .on("mouseout", (event, d) => {
+                var current = d3.select(event.currentTarget); // 通过参数传递的方式获取当前的圆圈元素
+                current.transition().duration(200).attr('height',bar_height - yAScale(d.A)).attr("y", d => yAScale(d.A)+10)
+                // 当鼠标移出时，隐藏信息展示框
+                tooltip.style("visibility", "hidden")
+            });
+
+
+        
+            // 创建矩形元素B
+            svg3.selectAll(".timebar")
+            .data(newData)
+            .enter()
+            .append("rect")
+            .attr('class','timebar')
+            .attr("x", d => xScale(d.time[0])) // 矩形的起始位置
+            .attr("y", bar_height*2+10) // 矩形的垂直位置
+            .attr("width", d => xScale(d.time[1]) - xScale(d.time[0])+ xScale.bandwidth()) // 矩形的宽度
+            .attr("height", 10) // 矩形的高度
+            .attr("fill", "#003472") // 矩形的颜色
+            .attr("opacity", d => yBScale(Math.log(d.B+1))) // 根据值设置透明度
+            .on("mouseover", (event, d) => {
+                var current = d3.select(event.currentTarget); // 通过参数传递的方式获取当前的元素
+                current.transition().duration(200).attr('height',13)
+                // 创建动态信息展示框
+                tooltip.style("visibility", "visible")
+                tooltip.html(`创作作品数：${d.B}`)
+                    .style("left", (event.pageX+ 10) + "px")
+                    .style("top", (event.pageY + 10) + "px");
+            })
+            .on("mousemove", (event,d) => {
+                // 在鼠标移动时，更新信息展示框的位置
+                tooltip.style("left", (event.pageX+ 10) + "px").style("top", (event.pageY+ 10 ) + "px");
+            })
+            .on("mouseout", (event, d) => {
+                var current = d3.select(event.currentTarget); // 通过参数传递的方式获取当前的圆圈元素
+                current.transition().duration(200).attr('height',10)
+                // 当鼠标移出时，隐藏信息展示框
+                tooltip.style("visibility", "hidden")
+            });
+
+            build_legend(svg3,[time_width-60,bar_height*2+30],["white","#003472"],["作品少","作品多"])
+
+
+            // 添加纵坐标轴
+            svg3.append("g")
+            .attr("transform", `translate(${time_width},10 )`)
+            .call(d3.axisRight(yAScale))
+
+            // 设置纵坐标的文字描述
+            svg3.append("text")
+                .attr("transform", `translate(${time_width-40},0 ) `)  
+                .attr("overflow", "visible")
+                .attr("dy", "1em")  // 垂直偏移
+                .style("text-anchor", "middle")
+                .attr("font-size",12)
+                .text("发明美食数");
+
+            // 添加下时间轴
+            svg3.append("g")
+            .attr("transform", `translate(0, ${bar_height*2+10})`)
+            .call(d3.axisTop(xScale))
+
+            // 添加上时间轴
+            svg3.append("g")
+            // .attr('x',0)
+            // .attr("y",10)
+            .attr("transform", `translate(0, ${bar_height+10})`)
+            .call(d3.axisBottom(xScale));
+
+            // 添加刷选功能
+            const brush = d3.brushX()
+            .extent([[0, bar_height+10], [time_width, bar_height*2+10]])
+            .on("end", brushed);
+
+            svg3.append("g")
+            .attr("class", "brush")
+            .call(brush);
+
+            function brushed(e,i) {
+                if(!e.selection){ 
+                    events.attr("display","none");
+                    d3.selectAll("#direction").remove()
+                    svg2.selectAll("text").remove();
+                    svg2.append("text").html("还没有选中对象QwQ").attr("font-size",20).attr("text-anchor", "middle") // 设置文本在水平方向上居中对齐
+                    .attr("dominant-baseline", "middle") // 设置文本在垂直方向上居中对齐
+                    ;return  }  //补丁
+                let [x0,x1]=[Math.ceil(invertX(e.selection[0])),Math.floor(invertX(e.selection[1]))]
+                events.filter(d=>{return d.time[1]<x0 || d.time[0]>x1}).attr("display","none")
+                events.filter(d=>{return d.time[1]>=x0 && d.time[0]<=x1}).attr("display","block").raise()
+
+                event_show = people.filter(d=> d.time[1]>=x0 && d.time[0]<=x1)
+
+
+                // 更新词云
+                // 清除原有的词云
+                svg2.selectAll("text").remove();
+                Poemswords = [];
+                event_show.forEach(function(e) {
+                    // 在poems数据集中查找匹配的诗句
+                    // if(e.time[0]<1000){console.log(e.time[0]);return }
+                    var matchedPoem = poems.poems.filter(poem=>{
+                        return e.articles.includes(poem.rhythmic)
+                    });
+                    if (matchedPoem.length > 0) {
+                        matchedPoem.map(d=>d.paragraphs).forEach(p=>{
+                            Poemswords.push(p)
+                        })
+                        ;
+                    }
+                });
+                uniquePoemswords = Poemswords.filter((item, index) => {
+                    return Poemswords.indexOf(item) === index
+                })
+                if(uniquePoemswords.length==0){
+                    svg2.append("text").html("没有捏").attr("font-size",20).attr("text-anchor", "middle") // 设置文本在水平方向上居中对齐
+                    .attr("dominant-baseline", "middle")
+                }
+                console.log(uniquePoemswords.toString())
+                build_wordcloud(uniquePoemswords.toString(),1,svg2,wordCloudfill)
+
+
+                d3.selectAll("#direction").remove()
+                let direct = svg.append("path").datum(event_show)
+                .attr("id","direction")
+                .attr("d", line)
+                .attr("fill", "none")
+                .attr("stroke", "blue")
+                .attr("stroke-width", 2)
+                .style("opacity", 0.7);
+
+                // 获取线段的总长度
+                var totalLength = direct.node().getTotalLength();
+
+                direct.style("stroke-dasharray", totalLength)
+                .style("stroke-dashoffset", totalLength)
+                .transition()
+                .duration(totalLength*5)
+                // .delay(totalLength*3)
+                .style("stroke-dashoffset", 0)
+                .transition()
+                .delay(20)
+                .style("opacity", 0)
+
+                events.raise()
+
+                
+            }
+
+
+            // 对数据进行处理，根据e_title属性进行合并相同的记录，时间范围取并集
+            var period = [];
+            people.forEach(function(d) {
+                var existingRecord = period.find(function(newD) {
+                    return d.e_title === newD.e_title;
+                });
+                if (existingRecord) {
+                    // 合并时间范围
+                    existingRecord.time = mergeTimeRanges(d.time, existingRecord.time);
+                    // 其他属性相加
+                } else {
+                    period.push({ e_title: d.e_title, time: d.time });
+                }
+            });
+
+            // 添加矩形可视化每个阶段的长度
+            let background = svg3.append("g").attr("id","bg").selectAll("rect")
+                .data(period)
+                .enter()
+                .append("rect")
+                .attr("x", function(d) { return xScale(d.time[0]); }) // 假设 xScale 是时间范围的比例尺
+                .attr("y", 10) // 假设矩形的位置在时间轴上方 10 个像素处
+                .attr("width", function(d) { return xScale(d.time[1]) - xScale(d.time[0])+xScale.bandwidth(); }) // 根据时间范围计算矩形的宽度
+                .attr("height", bar_height) // 假设矩形的高度
+                .attr("fill", (d,i)=> "lightblue")
+                // .style("pointer-events", "none")  //不许选中
+                .attr("opacity",0.8)
+                .attr("transform", `translate(0, ${bar_height})`)
+                .on("mouseover",function(e,i){
+                    console.log(e)
+                });
+
+            d3.select("#bg").lower()
+
+
+            // 在矩形中心标注出对应的 e_title
+            svg3.append("g").selectAll("text")
+                .data(period)
+                .enter()
+                .append("text")
+                .attr("x", function(d) { return (xScale(d.time[0]) + xScale(d.time[1]) )/ 2+xScale.bandwidth()/2; }) // 根据时间范围计算标注的位置
+                .attr("y", 13) // 假设标注的位置
+                .text(function(d) { return d.e_title; })
+                .attr("text-anchor", "middle")
+                .attr("alignment-baseline", "middle")
+                .attr('font-size',10)
+                .style("pointer-events", "none")  //不许选中
+                .attr("transform", d=>`translate(0, ${bar_height*1.5})  `)
+                .style("writing-mode", "tb") // 将文字竖写
+                // .style("glyph-orientation-vertical", 50); // 设置文字旋转角度;
+
+
+        }
+
+
+        
+
+    </script>
+</body>
+
+</html>
